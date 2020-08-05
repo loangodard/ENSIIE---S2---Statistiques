@@ -1,0 +1,487 @@
+---
+title: "Projet_Stats"
+author: "Loan Godard"
+date: "5 mai 2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Phase 1 : Prise en main des données
+
+On importe les données et on remplace les Yes/No par 1/0.
+
+```{r warning = FALSE,message=FALSE}
+#Importation des données
+library("ggpubr")
+library(dplyr) #Library pour filtrer, trier, manipuler les données...
+library(Hmisc)
+library(VIM)
+library(lubridate) # Permet la gestion des dates
+library(ggplot2) #Tracer de Graph
+library("car")
+library(corrplot) #Graphe de corélation
+
+
+data = read.csv('weatherAUS.csv',header=TRUE,sep=',')
+
+#data$RainToday[data$RainToday=="Yes"] = replace(data$RainToday[data$RainToday=="Yes"],c("RainToday"),1)
+data$RainTodayDigit[is.na(data$RainToday)] = 0 #On remplace les données manquantes par "No" car elles sont largement majoritaire
+data$RainTomorrowDigit[is.na(data$RainTomorrow)] = 0
+data$RainTodayDigit[data$RainToday == "Yes"] = 1
+data$RainTodayDigit[data$RainToday == "No"] = 0
+data$RainTomorrowDigit[data$RainTomorrow == "Yes"] = 1
+data$RainTomorrowDigit[data$RainTomorrow == "No"] = 0
+
+data$RainToday<-data$RainTodayDigit
+data$RainTomorrow<-data$RainTomorrowDigit
+
+#On nettoie les données et on suprime les données qui ne nous intéressent pas.
+data$RainTodayDigit <- NULL
+data$RainTomorrowDigit<-NULL
+data$RISK_MM <- NULL
+data$Evaporation <- NULL
+data$Sunshine <-NULL
+data$Cloud9am <- NULL
+data$Cloud3pm <- NULL
+
+#On extrait les données de chaque ville étudiés.
+dataBallarat=filter(data,Location == "Ballarat")
+dataAlbury=filter(data,Location == "Albury")
+dataNorfolkIsland=filter(data,Location == "NorfolkIsland")
+
+```
+
+Nous étudions 16 variables différentes.
+Toutes les variables sont quantitatives sauf les directions du vent et la variable "RainToday".
+
+Pour remplacer les données manquantes, on utilise plusieurs stratégie :
+
+Dans tous les cas on complète les données manquantes des directions grâce à l'algorithme kNN, on prend un k arbitraire.
+Pour les autres données on remplace les données manquantes soit par la moyenne de chaque ville soit par la médiane de chaque ville. On verra ensuite pour choisir quelles données on étudiera.
+
+```{r warning = FALSE,message=FALSE}
+dataBallarat.moy=dataBallarat
+dataBallarat.med=dataBallarat
+dataAlbury.moy=dataAlbury
+dataAlbury.med=dataAlbury
+dataNorfolkIsland.moy=dataNorfolkIsland
+dataNorfolkIsland.med=dataNorfolkIsland
+
+caracteristique = c("MinTemp","MaxTemp","Rainfall","WindGustDir","WindGustSpeed","WindDir9am","WindDir3pm","WindSpeed9am","WindSpeed3pm","Humidity9am","Humidity3pm","Pressure9am","Pressure3pm","Temp9am","Temp3pm","RainToday","RainTomorrow")
+
+intCaracteristique = c("MinTemp","MaxTemp","Rainfall","WindGustSpeed","WindSpeed9am","WindSpeed3pm","Humidity9am","Humidity3pm","Pressure9am","Pressure3pm","Temp9am","Temp3pm","RainToday")
+
+
+#On remplace les directions grâce à l"algorithme kNN : Je pense que c'est cohérent car le vent dépend en partie de la pression et de la température. L'algo kNN vas alors comparer les données de la ligne où la donnée est manquantes avec les autres données qui dépendnt aussi du vent et de la pression. En bref : on vas compléter les données en apprenant des données existantes.
+dir=c("WindGustDir","WindDir9am","WindDir3pm")
+dataNorfolkIsland = kNN(dataNorfolkIsland ,variable=dir, k=3)
+dataBallarat = kNN(dataBallarat,dir,k=3)
+dataAlbury = kNN(dataAlbury,dir,k=3)
+
+
+#Remplacement des données numériques manquantes par la moyenne
+for(c in intCaracteristique){
+  dataNorfolkIsland.moy[c] = impute(dataNorfolkIsland[c],fun=mean)
+  dataBallarat.moy[c] = impute(dataBallarat[c],fun=mean)
+  dataAlbury.moy[c] = impute(dataAlbury[c],fun=mean)
+}
+
+
+#Remplacement des données numériques manquantes par la médiane
+for(c in intCaracteristique){
+  dataNorfolkIsland.med[c] = impute(dataNorfolkIsland[c],fun=median)
+  dataBallarat.med[c] = impute(dataBallarat[c],fun=median)
+  dataAlbury.med[c] = impute(dataAlbury[c],fun=median)
+}
+```
+
+On fait une étude sur quelques variables qui me semblent intéréssantes
+```{r}
+variablesEtudie=c("Pressure3pm","MinTemp","MaxTemp","Temp3pm","Humidity3pm","Rainfall")
+
+#On compare les données selon si elles ont été complété avec la médiane ou la moyenne
+par(mfcol=c(2,3))
+for (v in variablesEtudie){
+  boxplot(dataNorfolkIsland.med[v],main=v,horizontal = TRUE)
+}
+
+par(mfcol=c(2,3))
+for (v in variablesEtudie){
+  hist(dataNorfolkIsland.med[v],main=v,freq=FALSE)
+}
+
+par(mfcol=c(2,3))
+for (v in variablesEtudie){
+  boxplot(dataNorfolkIsland.moy[v],main=v,horizontal = TRUE)
+}
+
+par(mfcol=c(2,3))
+for (v in variablesEtudie){
+  hist(dataNorfolkIsland.moy[v],main=v)
+}
+```
+
+Au vue des résultats obtenues, on constates que la manière dont on remplace les données n'a que peux d'influence. On étudiera seulement les données dont les données manquantes ont été remplacé par la médiane.
+
+```{r}
+dataNorfolkIsland = dataNorfolkIsland.med
+dataAlbury = dataAlbury.med
+dataBallarat = dataBallarat.med
+
+dataBallarat.continue = dataNorfolkIsland[intCaracteristique]
+
+corelation = cor(dataBallarat.continue)
+corrplot(corelation, type="upper", order="hclust", tl.col="black", tl.srt=45)
+
+covariance = cov(dataBallarat.continue)
+print(covariance)
+```
+
+Certaines relations semblent interessantes: 
+Rainfall a une corrélation négative avec la pression et une corrélation positive avec L'humidité (Surtout celle du matin).
+RainToday a une correlation positive avec Rainfall et est corrélé également avec la pression et l'humidité.
+RainToday et Rainfall ont une corrélation presque nulle avec la température
+
+Étudions de plus pret comment son lié certaines variables.
+
+```{r}
+g <- ggplot(dataNorfolkIsland, aes(x=RainToday, y=Pressure3pm))+
+  geom_jitter()+
+  geom_hline(yintercept=mean(dataNorfolkIsland$Pressure3pm), color = 'red',size=1)+
+  geom_hline(yintercept=median(dataNorfolkIsland$Pressure3pm), color = 'blue',size=1)
+
+t <- ggplot(dataNorfolkIsland, aes(x=RainToday, y=WindSpeed3pm))+
+  geom_jitter()
+
+h <- ggplot(dataNorfolkIsland, aes(x=Pressure3pm, y=WindSpeed3pm))+
+  geom_jitter()
+
+m <- ggplot(dataNorfolkIsland, aes(x=Humidity3pm, y=Pressure3pm))+
+  geom_jitter()
+
+
+
+figure <- ggarrange(g, t,h,m,
+                    ncol = 2, nrow = 2)
+figure
+```
+La pluie dépend bien de la pression : l'intervalle de la pression est plus grand les jours de pluie. L'écart type des jours de pluie est plus élevée pour la dispertion de la pression. De plus on remarque que le vent a tendance a être plus rapide les jours de pluie. Ce qui pourrait s'expliquer par le fait que plus la pression est écarté de la moyenne, plus le vend et rapide... On remarque également que la pression décroit en fonction de l'humidité...
+
+On a donc ici un lot de variable dépendantes entre elles et je pense que l'enjeu vas être de déterminer quelle variable étudier pour prévoir la pluie...
+
+Pour la question 5 : je n'ai pas encore regardé la théorie mais on vas tracer des boites parallele ou des violons pour représenter deux variables dont une est continue et l'autre discrète.
+
+```{r}
+g <- ggplot(dataNorfolkIsland, aes(x=WindDir3pm, y=Pressure3pm))+
+  geom_boxplot()
+
+
+
+h<-ggplot(dataNorfolkIsland, aes(x=WindDir3pm, y=Pressure3pm))+
+  geom_violin()
+
+
+figure <- ggarrange(g,h,
+                    ncol = 2, nrow = 1)
+figure
+```
+# Phase 2 : Modélisation des lois
+
+## Question 1
+On Créer des dataFrames avec de jours aléatoires...
+```{r}
+checkConformite <- function(sample){
+  sortedSample = sort(sample)
+  for (i in 2:length(sortedSample)){
+    if(sortedSample[i]-sortedSample[i-1]<3){
+      return(FALSE)
+    }
+  }
+  return(TRUE)
+}
+
+Years = 2009:2016 #En 2017 Il n'y a que 6 mois complétés  #En 2013, il n'y a pas les données du mois de février
+Months = 1:12
+Days = 1:27 #Pour éviter les problèmes en février et ca évite aussi les problèmes avec les mois à 30 et 31 jours.
+
+DatesAleatoires = data.frame(annee=1900,mois=01,jour = 01)
+
+for (m in Months){
+  for (y in Years){
+    if(y==2013 && m==2){
+      print("pas de données en février 2013")
+    }else{
+      jours=sample(Days,5)
+      l=0
+      while(checkConformite(jours) == FALSE){
+        jours=sample(Days,5)
+      }
+      for (d in jours){
+        DatesAleatoires=rbind(DatesAleatoires,c(y,m,d))
+      }
+    }
+  }
+}
+
+Months=1:6
+Years=c(17)
+Days = 1:25
+
+for (m in Months){
+  for (y in Years){
+      jours=sample(Days,5)
+      while(checkConformite(jours) == FALSE){
+        jours=sample(Days,5)
+      }
+      for (d in jours){
+        DatesAleatoires=rbind(DatesAleatoires,c(y,m,d))
+      }
+
+  }
+}
+
+JanvierAleatoire = filter(DatesAleatoires, mois == 1)
+FevrierAleatoire = filter(DatesAleatoires, mois == 2)
+MarsAleatoire = filter(DatesAleatoires, mois == 3)
+AvrilAleatoire = filter(DatesAleatoires, mois == 4)
+MaiAleatoire = filter(DatesAleatoires, mois == 5)
+JuinAleatoire = filter(DatesAleatoires, mois == 6)
+JuilletAleatoire = filter(DatesAleatoires, mois == 7)
+AoutAleatoire = filter(DatesAleatoires, mois == 8)
+SeptembreAleatoire = filter(DatesAleatoires, mois == 9)
+OctobreAleatoire = filter(DatesAleatoires, mois == 10)
+NovembreAleatoire = filter(DatesAleatoires, mois == 11)
+DecembreAleatoire = filter(DatesAleatoires, mois == 12)
+
+dfList = list(JanvierAleatoire,FevrierAleatoire,MarsAleatoire,AvrilAleatoire,MaiAleatoire,JuinAleatoire,JuilletAleatoire,AoutAleatoire,SeptembreAleatoire,OctobreAleatoire,NovembreAleatoire,DecembreAleatoire)
+
+AleaDates = lapply(dfList, function(df){
+  df= cbind(df,date=ymd(paste(df$annee,df$mois,df$jour,sep="-")))
+  df <- df[,c(-1,-2,-3)]
+})
+
+#Accès aux dates du mois i avec AleaDates[[i]]
+#Intersection des données avec les dates du mois i : setDT(dataNorfolkIsland)[ymd(Date) %in% AleaDates[[i]]]
+
+extractAleadfPerCity = function(df,month,datesAlea = AleaDates){ #Month prend un entier entre 1 et 12 et df les données d'une ville
+  return(setDT(df)[ymd(Date) %in% datesAlea[[month]]])
+}
+```
+Nous avons ici créé un liste de dataFrames comprenant des liste de jours aléatoires pour chaque mois. Les dates alétoire du mois i sont stocké dans AleaDates[[i]]
+Nous n'avons pas 50 données par dataframe car nous n'avons pas 10 années complètes de données...
+
+## Question 2
+
+```{r}
+par(mfrow=c(3,4))
+
+intCaracteristique =c(3,4,7,10,11,12,13,14,15,16,17)
+
+
+result = matrix(rep(0,11*12),11,12) # result[i,j] = intcaracteristique[i] au mois j : si result[i,j] == 1 alors la loi est une loi normale, sinon on considèrera que c'est une loi gamma
+
+OUI = 0
+NON = 0
+l = 1
+for (j in intCaracteristique){
+for(i in 1:12){
+
+  df=extractAleadfPerCity(dataNorfolkIsland,i)
+  testShapiroNormal=shapiro.test(df[[j]])
+
+
+  if(testShapiroNormal$p.value > 0.10){
+    OUI = OUI + 1
+    result[l,i]<-1
+    mainT = "-Nor"
+  }else{
+    NON=NON+1
+    mainT = "-Gam"
+  }
+  
+  
+  hist(df[[j]],main=paste(colnames(df)[[j]],' au mois ',i,mainT),freq = FALSE)
+  densite <- density(df[[j]])
+  lines(densite)
+}
+  l=l+1
+}
+
+print(OUI)
+print(NON)
+print(result)
+#On suppose que chaque paramètre a pour répartition une loi normale(Moyenne empirique, Variance empirique).
+```
+
+Voici les donnée dont le test de shapiro a une p-value supérieur à 5% et donc qu'on considére qui suivent une loi normale :
+
+Les coordonnées des 1 dans resultatTest sont représentent les données dont le test est accepté. On considère qu'elles suivent une loi normale. Les coordonnées des 0 représentent les données qui suivent une loi Gamma. On lit ainsi la matrice : s'il resultTest[i,j] == 1 alors   intcaracteristique[i] au mois j suit une loi normale. intCaractéristique est un vecteur d'indice qui représentent les indices des variables continues dans les dataframes. Dans les titres des histogrammes on lit si on considère que la distribution est plutôt celle d'une loi normale ou celle d'une loi gamma (Nor pour normale et Gam pour Gamma). Cela est directement extrait de la p-value du test de shapiro où on prend $\alpha = 5\%$. On considère que les variables qui ne passent pas le test de shapiro pour la loi normale suit une loi gamma car au vue des densités, si elles ne sont pas normale, elles sont nécessairement Gamma.
+
+## Question 3
+
+Soit $X\hookrightarrow \mathcal{N}(\mu,\sigma^2)$ La vraisemblance de X est donné par :
+
+$$\mathcal{L}_{(\mu,\sigma)}(x_1\dots x_n)=\frac{1}{(\sqrt{2\pi}\sigma)^n}e^{-\frac{1}{2\sigma^2}\sum^{n}_{i=1}(x_i-\mu)^2}$$
+
+On passe à la log-Vraisemblance pour maximiser plus simplement cette fonction et ainsi trouver l'estimateur du maximum de vraisemblance des paramètres...
+
+$$\mathcal{l}_{(\mu,\sigma)}(x_1\dots x_n)=-n(\ln(\sigma)+ln(\sqrt{2\pi}))-\frac{1}{2\sigma^2}\sum_{i=1}^n(x_i-\mu)^2$$
+
+On maximise cette dernière fonction en $\theta = (\mu,\sigma)$.
+
+$$\nabla \mathcal{l}_{(\mu,\sigma)}(x_1\dots x_n)= \left( \begin{array}{c}
+\frac{1}{\sigma^2}\sum_{i=1}^n(x_i-\mu) \\
+-\frac{n}{\sigma} + \frac{1}{\sigma^3}\sum_{i=1}^n(x_i-\mu)^2 \\
+\end{array} \right) = \left( \begin{array}{c}
+0 \\
+0 \\
+\end{array} \right) $$
+$$\Leftrightarrow \hat \theta = (\hat \mu, \hat \sigma^2) = (\frac{1}{n}\sum_{i=1}^nX_i ,\frac{1}{n}\sum_{i=1}^n(X_i-\mu)^2)$$
+
+
+Soit $Y\hookrightarrow\Gamma(a,b)$
+
+La log-vraisemblance est donné par 
+
+$$\mathcal{l}(a,b) = na\ln(b) - n\ln(\Gamma(a))+(a-1)\sum_{i=1}^n\ln(x_i)-b\sum_{i=1}^nx_i$$
+
+Les estimateurs du maximum de vraisemblance sont : 
+
+$\hat a = \bar X_n$ et $\hat b = \frac{a}{\bar X_N}$
+
+## Question 4
+
+Ici, on trace l'évolution de la moyenne et de la variance au cours du temps
+```{r}
+
+#Pour NorfolkIsland
+par(mfrow=c(2,2))
+
+for (j in intCaracteristique){
+moyenneN=c()
+varianceN=c()
+moyenneA=c()
+varianceA=c()
+moyenneB=c()
+varianceB=c()
+for(i in 1:12){
+  dfN=extractAleadfPerCity(dataNorfolkIsland,i)
+  dfA=extractAleadfPerCity(dataAlbury,i)
+  dfB=extractAleadfPerCity(dataBallarat,i)
+  moyenneN = rbind(moyenneN,mean(dfN[[j]]))
+  varianceN = rbind(varianceN,var(dfN[[j]]))
+  moyenneA = rbind(moyenneA,mean(dfA[[j]]))
+  varianceA = rbind(varianceA,var(dfA[[j]]))
+  moyenneB = rbind(moyenneB,mean(dfB[[j]]))
+  varianceB = rbind(varianceB,var(dfB[[j]]))
+}
+  plot(moyenneN,xlab="NorfolkIsland",main=paste('Moyenne',colnames(dfN)[[j]]))
+  plot(varianceN,xlab="NorfolkIsland",main=paste('Variance',colnames(dfN)[[j]]))
+  plot(moyenneA,xlab="Albury",main=paste('Moyenne',colnames(dfA)[[j]]))
+  plot(varianceA,xlab="Albury",main=paste('Variance',colnames(dfA)[[j]]))
+  plot(moyenneB,xlab="Bellarat",main=paste('Moyenne',colnames(dfB)[[j]]))
+  plot(varianceB,,xlab="Bellarat",main=paste('Variance',colnames(dfB)[[j]]))
+}
+
+```
+
+## Phase 3 : Prédiction de la pluie
+
+```{r}
+probaPluie <- function(data,mois){
+  #Renvoie la probabilité qu'il pleuve demain par mois.
+  df = data[month(Date) == m]
+  rainTomorrow = df$RainTomorrow
+  return(sum(rainTomorrow)/length(rainTomorrow))
+}
+
+compteurPluie <- function(data,mois){
+  df = data[month(Date) == m]
+  rainTomorrow = df$RainTomorrow
+  return(sum(data[month(Date) == m]$RainTomorrow))
+}
+
+probaPluieN=c()
+probaPluieA=c()
+probaPluieB=c()
+for(m in 1:12){
+  probaPluieN = rbind(probaPluieN,probaPluie(dataNorfolkIsland,m))
+  probaPluieA = rbind(probaPluieA,probaPluie(dataAlbury,m))
+  probaPluieB = rbind(probaPluieA,probaPluie(dataAlbury,m))
+}
+
+hist(probaPluieN,main=paste("Proba Pluie Demain - Norfolk"),freq = FALSE)
+densite <- density(probaPluieN)
+lines(densite)
+shapiro.test(probaPluieN)
+hist(probaPluieA,main=paste("Proba Pluie Demain - Albury"),freq = FALSE)
+densite <- density(probaPluieA)
+lines(densite)
+shapiro.test(probaPluieA)
+hist(probaPluieB,main=paste("Proba Pluie Demain - Ballarat"),freq = FALSE)
+densite <- density(probaPluieB)
+lines(densite)
+shapiro.test(probaPluieB)
+```
+Les résultats du test de shapiro dépendent des dates générées, parfois la p-value est très faible, parfois elle est très grande.
+
+```{r warning=FALSE}
+for (m in 1:12){
+  testN = prop.test(x=compteurPluie(dataNorfolkIsland,m),n=length(dataNorfolkIsland[month(Date) == m]$RainTomorrow),p=0.05,correct = FALSE)
+  testA = prop.test(x=compteurPluie(dataAlbury,m),n=length(dataAlbury[month(Date) == m]$RainTomorrow),p=0.05,correct = FALSE)
+  testB = prop.test(x=compteurPluie(dataBallarat,m),n=length(dataBallarat[month(Date) == m]$RainTomorrow),p=0.05,correct = FALSE)
+  if(testN$p.value>0.05 || testA$p.value>0.05 || testB$p.value>0.05){
+    print('p-value>0.05')
+  }
+}
+```
+
+Les test on tous une p-value inférieur à 5‰ donc on rejette $H_0$ qui est "il pleut demain avec une probabilté 0.05".
+
+
+### Question 3
+
+On vas effectuer un test de proportion pour comparer les proportions un mois d'été avec les proportions un mois d'hiver, on choisis Juillet vs Fevrier
+
+```{r warning=FALSE}
+effectifPluieEte = sum(dataBallarat[month(Date) == 2]$RainTomorrow)
+effectifPluieHiver = sum(dataBallarat[month(Date) == 8]$RainTomorrow)
+effectifNonPluieEte = length(dataBallarat[month(Date) == 2]$RainTomorrow) - effectifPluieEte
+effectifNonPluieHiver = length(dataBallarat[month(Date) == 8]$RainTomorrow) - effectifPluieHiver
+
+tabTest = c()
+
+tabTest=cbind(tabTest,c(effectifPluieEte,effectifPluieHiver))
+tabTest=cbind(tabTest,c(effectifNonPluieEte,effectifNonPluieHiver))
+colnames(tabTest)<-c("Été","Hiver")
+rownames(tabTest)<-c("Pluie","Non Pluie")
+print(tabTest)
+
+#On fait un test du Khi 2
+chisq.test(tabTest)
+```
+On a $H_0 : p_1 = p_2$ et $H_1 : p_1 \ne p_2$
+La p-Value est très faible, on rejette $H_0$ => la proba de pluie en hiver est différente de la proba de pluie en été.
+
+### Question 4
+
+Cf rapport
+
+### Question 5
+```{r}
+glm(formula = dataAlbury$RainTomorrow ~ dataAlbury[, 3] + 
+    dataAlbury[, 4] + dataAlbury[, 7] + dataAlbury[, 
+    10] + dataAlbury[, 11] + dataAlbury[, 12] + dataAlbury[, 13] + dataAlbury[, 
+    14] + dataAlbury[, 15] + dataAlbury[, 16] + dataAlbury[, 
+    17], family = "binomial", 
+    data = dataAlbury)
+##La fonction ci dessus return une erreur alors qu'elle marchait pendant un moment ... Le screen du résultat est dans le rapport.
+
+```
+
+
